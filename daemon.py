@@ -3,6 +3,7 @@
 import re
 import socket
 import traceback
+from typing import Dict
 
 import graphitesend
 
@@ -13,6 +14,8 @@ graphitesend.init(graphite_server="192.168.1.3", prefix="xap", system_name="")
 recv_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 recv_socket.bind(('', 3639))
 
+last_data_by_uid: Dict[str, Dict] = {}
+
 while True:
     buffer: bytes = recv_socket.recv(4096)
     # noinspection PyBroadException
@@ -21,10 +24,15 @@ while True:
         data = xap.to_map(xap.parse_xAP(decoded))
 
         if "xAP-header" not in data:
-            if "xAP-hbeat" not in data:
+            if "xAP-hbeat" in data:
+                uid = data["xAP-hbeat"]["uid"]
+                # resend data as a "heartbeat" to keep this machine alive in grafana
+                graphitesend.send_dict(last_data_by_uid[uid])
+            else:
                 print("xAP-header not present in %s" % (decoded,))
             continue
 
+        uid = data["xAP-header"]["uid"]
         source = data["xAP-header"]["source"]
         source_match = re.fullmatch(r"Almico\.SpeedFan\.(.+)", source)
         if source_match:
@@ -37,6 +45,7 @@ while True:
                     collected_data[prefix + sensor_id + "." + sensor_name] = values["curr"]
             if len(collected_data) > 0:
                 graphitesend.send_dict(collected_data)
+                last_data_by_uid[uid] = collected_data
             else:
                 print("Collected no data from xAP %s" % (decoded,))
         else:
